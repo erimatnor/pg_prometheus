@@ -14,7 +14,8 @@ MODULE_big = $(EXTENSION)
 SRCS = \
 	src/prom.c \
 	src/parse.c \
-	src/utils.c
+	src/utils.c \
+	src/am.c
 
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)

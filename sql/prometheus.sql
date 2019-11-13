@@ -298,7 +298,7 @@ BEGIN
         -- Create a view for the metrics
         EXECUTE format(
             $$
-            CREATE VIEW %I AS 
+            CREATE VIEW %I AS
             SELECT prom_construct(m.time, l.metric_name, m.value, l.labels) AS sample,
                    m.time AS time, l.metric_name AS name,  m.value AS value, l.labels AS labels
             FROM %I AS m
@@ -357,7 +357,7 @@ BEGIN
         -- Create a view for the metrics
         EXECUTE format(
             $$
-            CREATE VIEW %I AS 
+            CREATE VIEW %I AS
             SELECT sample AS sample, prom_time(sample) AS time, prom_name(sample) AS name, prom_value(sample) AS value, prom_labels(sample) AS labels
             FROM %I
             $$,
@@ -378,3 +378,13 @@ BEGIN
 
 END
 $BODY$;
+
+CREATE FUNCTION prometheus.prom_handler(internal)
+    RETURNS table_am_handler
+    AS '$libdir/pg_prometheus', 'prom_handler'
+    LANGUAGE C IMMUTABLE STRICT;
+
+-- Access method for prometheus storage format
+CREATE ACCESS METHOD prometheus
+TYPE TABLE
+HANDLER prometheus.prom_handler;
