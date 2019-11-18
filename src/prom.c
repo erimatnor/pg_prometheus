@@ -12,18 +12,18 @@
 PG_MODULE_MAGIC;
 #endif
 
-static char * 
-prom_label_strip_escape(const char *orig) 
+static char *
+prom_label_strip_escape(const char *orig)
 {
    char *new = palloc(strlen(orig)+1);
    int orig_index = 0;
    int new_index = 0;
    while (orig[orig_index] != '\0') {
-     if (orig_index==0 || orig[orig_index] != '\\' || orig[orig_index-1] == '\\')
-     {
-       new[new_index++] = orig[orig_index];
-     }
-     orig_index++;
+	 if (orig_index==0 || orig[orig_index] != '\\' || orig[orig_index-1] == '\\')
+	 {
+	   new[new_index++] = orig[orig_index];
+	 }
+	 orig_index++;
    }
    new[new_index] = '\0';
    return new;
@@ -219,7 +219,7 @@ prom_labels_to_jsonb_value(PrometheusSample *sample, JsonbParseState **parseStat
 		}
 		else
 		{
-      char * strip_escape = prom_label_strip_escape(PROM_LABEL_VALUE(label));
+	  char * strip_escape = prom_label_strip_escape(PROM_LABEL_VALUE(label));
 			v.type = jbvString;
 			v.val.string.len = strlen(strip_escape);
 			v.val.string.val = strip_escape;
@@ -432,4 +432,21 @@ prom_construct(PG_FUNCTION_ARGS)
 	parse_jsonb_labels(jb, &ctx);
 
 	PG_RETURN_POINTER(sample);
+}
+
+const char *hello(void);
+
+const char *
+hello(void)
+{
+	return "hello pg_prometheus";
+}
+
+
+PG_FUNCTION_INFO_V1(say_hello_prom);
+
+Datum
+say_hello_prom(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TEXT_P(cstring_to_text(hello()));
 }

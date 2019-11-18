@@ -1,4 +1,4 @@
-PG_CONFIG = pg_config
+PG_CONFIG := /usr/local/pgsql/bin/pg_config
 
 EXTENSION = pg_prometheus
 SQL_FILES = sql/prometheus.sql
@@ -40,7 +40,7 @@ REGRESS_OPTS = \
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 
-EXTRA_CLEAN = $(EXT_SQL_FILE) $(DEPS)
+EXTRA_CLEAN = $(EXT_SQL_FILE) $(DEPS) chunkfile
 
 DOCKER_IMAGE_NAME=pg_prometheus
 ORGANIZATION=timescale
@@ -68,6 +68,9 @@ package: clean $(EXT_SQL_FILE)
 	$(install_sh) -m 755 $(EXTENSION).so 'package/lib/$(EXTENSION).so'
 	$(install_sh) -m 644 $(EXTENSION).control 'package/extension/'
 	$(install_sh) -m 644 $(EXT_SQL_FILE) 'package/extension/'
+
+chunkfile: src/chunk.c
+	$(CC) -Wall -g -o $@ $<
 
 docker-image: Dockerfile
 	docker build --build-arg TIMESCALEDB_VERSION=$(TIMESCALEDB_VER) --build-arg PG_VERSION_TAG=$(PG_VER) -t $(ORGANIZATION)/$(DOCKER_IMAGE_NAME):latest-$(PG_VER) .
