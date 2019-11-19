@@ -69,8 +69,8 @@ package: clean $(EXT_SQL_FILE)
 	$(install_sh) -m 644 $(EXTENSION).control 'package/extension/'
 	$(install_sh) -m 644 $(EXT_SQL_FILE) 'package/extension/'
 
-chunkfile: src/chunk.c
-	$(CC) -Wall -g -o $@ $<
+chunkfile: src/chunk.c src/varint.c src/bitstream.c
+	$(CC) -Wall -g -o $@ $^
 
 docker-image: Dockerfile
 	docker build --build-arg TIMESCALEDB_VERSION=$(TIMESCALEDB_VER) --build-arg PG_VERSION_TAG=$(PG_VER) -t $(ORGANIZATION)/$(DOCKER_IMAGE_NAME):latest-$(PG_VER) .

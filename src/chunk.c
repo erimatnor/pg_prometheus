@@ -13,50 +13,22 @@
 #include <arpa/inet.h>
 #include <assert.h>
 
-enum {
-	ERROR,
-	WARNING,
-	NOTICE,
-	DEBUG,
-};
-
-#define elog(x, fmt, ...)								\
-	{													\
-		if (x == ERROR) {								\
-			fprintf(stderr, fmt "\n", ##__VA_ARGS__);	\
-			exit(-1);									\
-		} else {										\
-			fprintf(stdout, fmt "\n", ##__VA_ARGS__);	\
-		}												\
-	}
-
-
-typedef float float32;
-typedef double float64;
-typedef uint8_t uint8;
-typedef uint16_t uint16;
-typedef uint32_t uint32;
-typedef uint64_t uint64;
-typedef int8_t int8;
-typedef int16_t int16;
-typedef int32_t int32;
-typedef int64_t int64;
-typedef unsigned char uchar;
+#include "varint.h"
+#include "bitstream.h"
 
 typedef struct ChunkFile
 {
-	uchar magic[4];
-	uint32 version:8;
-	uint32 padding:24;
-	uchar chunks[0];
+	uint8 magic[4];
+	uint8 version;
+	uint8 padding[3];
+	uint8 chunks[0];
 } ChunkFile;
-
 
 typedef struct Chunk
 {
 	uint64 len;
 	uint8 encoding;
-	const uchar *data;
+	const uint8 *data;
 	uint32 crc32;
 } Chunk;
 
@@ -87,301 +59,6 @@ crc32(const void *data, size_t n_bytes, uint32* crc)
 	  *crc = table[(uint8)*crc ^ ((uint8*)data)[i]] ^ *crc >> 8;
 }
 
-/*
-static uint64
-decode_unsigned_varint(const void *const data, size_t *decoded_bytes)
-{
-	const uchar *const bytes = (const uchar *const) data;
-	size_t i = 0;
-	uint64_t decoded_value = 0;
-	int shift_amount = 0;
-
-	do
-	{
-		decoded_value |= (uint64)(bytes[i] & 0x7F) << shift_amount;
-		shift_amount += 7;
-	} while ( (bytes[i++] & 0x80) != 0 );
-
-	if (decoded_bytes)
-		*decoded_bytes = i;
-
-	return decoded_value;
-}
-*/
-
-#if 0
-
-static const char MSB = 0x80;
-
-static uint64
-uvarint_decode(const unsigned char* buf, size_t* bytes) {
-	uint64 result = 0;
-	int bits = 0;
-	const unsigned char* ptr = buf;
-	uint64 ll;
-
-	if (bytes != NULL)
-		*bytes = 0;
-
-	while (*ptr & MSB) {
-		ll = *ptr;
-		result += ((ll & 0x7F) << bits);
-		ptr++;
-		bits += 7;
-//	assert((ptr - buf) < len);
-	}
-
-	ll = *ptr;
-	result += ((ll & 0x7F) << bits);
-
-	if (bytes != NULL)
-		*bytes = ptr - buf + 1;
-
-	return result;
-}
-#endif
-
-static uint16
-scan_varint(unsigned len, const uint8_t *data)
-{
-	uint16 i;
-	if (len > 10)
-		len = 10;
-	for (i = 0; i < len; i++)
-		if ((data[i] & 0x80) == 0)
-			break;
-	if (i == len)
-		return 0;
-	return i + 1;
-}
-
-static inline uint32_t
-parse_uint32(unsigned len, const uint8_t *data)
-{
-	uint32_t rv = data[0] & 0x7f;
-	if (len > 1) {
-		rv |= ((uint32_t) (data[1] & 0x7f) << 7);
-		if (len > 2) {
-			rv |= ((uint32_t) (data[2] & 0x7f) << 14);
-			if (len > 3) {
-				rv |= ((uint32_t) (data[3] & 0x7f) << 21);
-				if (len > 4)
-					rv |= ((uint32_t) (data[4]) << 28);
-			}
-		}
-	}
-	return rv;
-}
-
-static uint64_t
-parse_uint64(unsigned len, const uint8_t *data)
-{
-	unsigned shift, i;
-	uint64_t rv;
-
-	if (len < 5)
-		return parse_uint32(len, data);
-	rv = ((uint64_t) (data[0] & 0x7f)) |
-		((uint64_t) (data[1] & 0x7f) << 7) |
-		((uint64_t) (data[2] & 0x7f) << 14) |
-		((uint64_t) (data[3] & 0x7f) << 21);
-	shift = 28;
-	for (i = 4; i < len; i++) {
-		rv |= (((uint64_t) (data[i] & 0x7f)) << shift);
-		shift += 7;
-	}
-	return rv;
-}
-
-static uint64
-uint64_unpack(const uchar *data, size_t len, uint16 *varintlen)
-{
-	uint16 l = scan_varint(len, data);
-
-	if (varintlen)
-		*varintlen = l;
-
-	return parse_uint64(l, data);
-}
-
-static int64
-int64_unpack(const uchar *data, size_t len, uint16 *varintlen)
-{
-	uint64 ux = uint64_unpack(data, len, varintlen);
-	int64 x = (int64) (ux >> 1);
-
-	if ((ux & 1) != 0)
-		x = ~x;
-
-	return x;
-}
-
-typedef bool Bit;
-typedef uchar Byte;
-
-#define ZERO false
-#define BS_EOF 1
-
-typedef struct Bitstream {
-	const uchar *data;
-	size_t len;
-	off_t off;
-	uint8 num_valid_bits;
-} Bitstream;
-
-static void
-bitstream_init(Bitstream *bs, const uchar *data, size_t len)
-{
-	memset(bs, 0, sizeof(*bs));
-	bs->data = data;
-	bs->len = len;
-	bs->num_valid_bits = 8;
-}
-
-static int
-bitstream_read_bit(Bitstream *bs, Bit *bit)
-{
-	if ((size_t) bs->off == bs->len)
-		return BS_EOF;
-
-	if (bs->num_valid_bits == 0)
-	{
-		bs->off++;
-
-		if ((size_t) bs->off == bs->len)
-			return BS_EOF;
-
-		bs->num_valid_bits = 8;
-	}
-
-	if (NULL != bit)
-		*bit = (bs->data[0] << (8 - bs->num_valid_bits)) & 0x80;
-
-	bs->num_valid_bits--;
-
-	return 0;
-}
-
-static int
-bitstream_read_byte(Bitstream *bs, Byte *byte)
-{
-	if ((size_t) bs->off == bs->len)
-		return BS_EOF;
-
-
-	if (bs->num_valid_bits == 0)
-	{
-		bs->off++;
-
-		if ((size_t) bs->off == bs->len)
-			return BS_EOF;
-
-		if (byte)
-			*byte = bs->data[bs->off - 1];
-
-		return 0;
-	}
-
-	if (bs->num_valid_bits == 8) {
-		bs->num_valid_bits = 0;
-
-		if (byte)
-			*byte = bs->data[0];
-
-		return 0;
-	}
-
-	if (byte)
-		*byte = bs->data[0] << (8 - bs->num_valid_bits);
-
-	bs->off++;
-
-	if ((size_t) bs->off == bs->len)
-		return BS_EOF;
-
-	/* We just advanced the stream and can assume the shift to be 0. */
-	if (byte)
-		*byte |= bs->data[0] >> bs->num_valid_bits;
-
-	return 0;
-}
-
-static int
-bitstream_read_bits(Bitstream *bs, uint8 nbits, uint64 *bits)
-{
-	uint64 u = 0;
-
-	while (nbits >= 8)
-	{
-		Byte byte;
-		int err;
-
-		err = bitstream_read_byte(bs, &byte);
-
-		if (err != 0)
-			return err;
-
-		u = (u << 8) | (uint64) byte;
-		nbits -= 8;
-	}
-
-	if (nbits == 0)
-	{
-		if (bits)
-			*bits = u;
-
-		return 0;
-	}
-
-	if (nbits > bs->num_valid_bits)
-	{
-		u = (u << bs->num_valid_bits) | ((uint64) (bs->data[0]<<(8-bs->num_valid_bits))>>(8-bs->num_valid_bits));
-		nbits -= bs->num_valid_bits;
-		bs->off++;
-
-		if ((size_t) bs->off == bs->len)
-			return BS_EOF;
-
-		bs->num_valid_bits = 8;
-	}
-
-	u = (u << nbits) | (uint64) ((bs->data[0]<<(8-bs->num_valid_bits))>>(8-nbits));
-
-	bs->num_valid_bits -= nbits;
-
-	if (bits)
-		*bits = u;
-
-	return 0;
-}
-
-static int
-bitstream_read_uvarint(Bitstream *bs, uint64 *value)
-{
-	uint16 varintlen;
-	uint64 v = uint64_unpack(&bs->data[bs->off], bs->len - bs->off, &varintlen);
-
-	if (value)
-		*value = v;
-
-	bs->off += varintlen;
-
-	return varintlen;
-}
-
-static int
-bitstream_read_varint(Bitstream *bs, int64 *value)
-{
-	uint16 varintlen;
-	int64 v = int64_unpack(&bs->data[bs->off], bs->len - bs->off, &varintlen);
-
-	if (value)
-		*value = v;
-
-	bs->off += varintlen;
-
-	return varintlen;
-}
 
 typedef struct SampleIterator {
 	Bitstream bs;
@@ -396,11 +73,11 @@ typedef struct SampleIterator {
 	float64 value;
 } SampleIterator;
 
-SampleIterator *
+static SampleIterator *
 sample_iter_init(SampleIterator *it, Chunk *chunk)
 {
 	memset(it, 0, sizeof(SampleIterator));
-	bitstream_init(&it->bs, chunk->data + sizeof(uint16), chunk->len);
+	bitstream_init(&it->bs, chunk->data + 2, chunk->len - 2);
 	it->numtotal |= chunk->data[0] << 8;
 	it->numtotal |= chunk->data[1];
 
@@ -423,9 +100,9 @@ sample_iter_read_value(SampleIterator *it)
 	}
 	else
 	{
-		uint8 mbits;
-		uint64 vbits;
-		uint64 bits;
+		uint8 mbits = 0;
+		uint64 vbits = 0;
+		uint64 bits = 0;
 
 		it->err = bitstream_read_bit(&it->bs, &b);
 
@@ -441,39 +118,45 @@ sample_iter_read_value(SampleIterator *it)
 		}
 		else
 		{
-
+			/* Read leading bits */
 			it->err = bitstream_read_bits(&it->bs, 5, &bits);
+			assert((uint8) (bits & 0xff) <= 0x1f);
 
 			if (it->err != 0)
 				return false;
 
+			it->leading = bits & 0xff;
+			assert(it->leading <= 64);
 
-			it->leading = (uint8) bits;
-
+			/* Read meaningful bits */
 			it->err = bitstream_read_bits(&it->bs, 6, &bits);
 
 			if (it->err != 0)
 				return false;
 
-			mbits = (uint8) bits;
+			mbits = bits & 0xff;
 
 			/* 0 significant bits here means we overflowed and we actually need
 			 * 64. */
 			if (mbits == 0)
 				mbits = 64;
 
+			/* Calculate trailing bits */
 			it->trailing = 64 - it->leading - mbits;
+			assert(it->trailing <= 64);
 		}
 
+		assert(it->leading  + it->trailing <= 64);
 		mbits = 64 - it->leading - it->trailing;
 		it->err = bitstream_read_bits(&it->bs, mbits, &bits);
 
 		if (it->err != 0)
 			return false;
 
-		vbits = *((uint64 *) &it->value);
+		memcpy(&vbits, &it->value, 8);
+		//vbits = *((uint64 *) &it->value);
 		vbits ^= (bits << it->trailing);
-		it->value = *((float64 *) &vbits);
+		memcpy(&it->value, &vbits, 8);
 	}
 
 	it->numread++;
@@ -498,24 +181,20 @@ sample_iter_next(SampleIterator *it)
 		return false;
 	}
 
-	elog(DEBUG, "Next: numread=%u numtotal=%u bytes 0x%02x 0x%02x",
-		 it->numread, it->numtotal, it->bs.data[0], it->bs.data[1]);
-
 	if (it->numread == 0)
 	{
 		uint64 bits;
 
 		bitstream_read_varint(&it->bs, &it->timestamp);
-
 		it->err = bitstream_read_bits(&it->bs, 64, &bits);
 
 		if (it->err != 0)
 			return false;
 
-	   it->value = *((float64 *) &bits);
-	   it->numread++;
+		memcpy(&it->value, &bits, 8);
+		it->numread++;
 
-	   return true;
+		return true;
 	}
 
 	if (it->numread == 1)
@@ -527,11 +206,18 @@ sample_iter_next(SampleIterator *it)
 	}
 
 	// read delta-of-delta
+	/*printf("Reading delta of delta @ 0x%02x 0x%02x 0x%02x 0x%02x count=%d\n",
+		   it->bs.data[it->bs.off + 0],
+		   it->bs.data[it->bs.off + 1],
+		   it->bs.data[it->bs.off + 2],
+		   it->bs.data[it->bs.off + 3],
+		   it->bs.count); */
+
 	for (i = 0; i < 4; i++)
 	{
 		Bit b;
 
-		d <<= 1;
+		d = d << 1;
 
 		it->err = bitstream_read_bit(&it->bs, &b);
 
@@ -548,12 +234,16 @@ sample_iter_next(SampleIterator *it)
 	{
 	case 0x00:
 		// dod == 0
+		break;
 	case 0x02:
 		sz = 14;
+		break;
 	case 0x06:
 		sz = 17;
+		break;
 	case 0x0e:
 		sz = 20;
+		break;
 	case 0x0f:
 		it->err = bitstream_read_bits(&it->bs, 64, &bits);
 
@@ -561,6 +251,11 @@ sample_iter_next(SampleIterator *it)
 			return false;
 
 		dod = (int64) bits;
+		break;
+	default:
+		assert(false);
+		exit(-1);
+		break;
 	}
 
 	if (sz != 0)
@@ -595,12 +290,14 @@ sample_iter_next(SampleIterator *it)
 static off_t
 fill_chunk(Chunk *chunk, const void *const data, size_t len)
 {
-	const uchar *const bytes = (const uchar *const) data;
+	const uint8 *const bytes = (const uint8 *const) data;
 	uint16 varintlen;
 	uint32 checksum;
 
+	printf("reading chunk len: 0x%02x 0x%02x\n", bytes[0], bytes[1]);
 	chunk->len = uint64_unpack(bytes, len, &varintlen);
 	//chunk->len = uvarint_decode(bytes, &varintlen);
+	//chunk->len = decode_unsigned_varint(bytes, &varintlen);
 
 	if (chunk->len < varintlen)
 		elog(ERROR, "Bad chunk format varintlen %u vs chunk->len %" PRIu64 "", varintlen, chunk->len);
@@ -627,9 +324,87 @@ fill_chunk(Chunk *chunk, const void *const data, size_t len)
 	return chunk->len + varintlen + 1 + sizeof(chunk->crc32);
 }
 
-static const uchar MAGIC[] = {
+static const uint8 MAGIC[] = {
 	0x85, 0xBD, 0x40, 0xDD
 };
+
+// 1000 0101 - 1011 1101 - 0100 0000 - 1101 1101
+static Bit magic_bits[] = {
+	1, 0, 0, 0, 0, 1, 0, 1,
+	1, 0, 1, 1, 1, 1, 0, 1,
+	0, 1, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 1, 1, 1, 0, 1
+};
+
+static void
+test_read_bit(void)
+{
+	Bitstream bs;
+	Bit b;
+	int err;
+	int i;
+
+	bitstream_init(&bs, &MAGIC[0], sizeof(MAGIC));
+
+	for (i = 0; i < sizeof(magic_bits); i++)
+	{
+		err = bitstream_read_bit(&bs, &b);
+		assert(err == 0);
+		assert(b == magic_bits[i]);
+	}
+}
+
+static void
+test_read_bits(void)
+{
+	Bitstream bs;
+	uint64 bits;
+	uint32 result;
+	int err;
+
+	bitstream_init(&bs, &MAGIC[0], sizeof(MAGIC));
+	err = bitstream_read_bits(&bs, 32, &bits);
+	assert(err == 0);
+
+	result = ntohl(bits & 0xffffffff);
+	assert(memcmp(&result, &MAGIC[0], 4) == 0);
+}
+
+static void
+test_read_5_bits(void)
+{
+	Bitstream bs;
+	uint64 bits;
+	uint8 allones[2] = { 0xff, 0xff };
+	int err;
+
+	bitstream_init(&bs, &MAGIC[0], sizeof(MAGIC));
+	err = bitstream_read_bits(&bs, 5, &bits);
+	assert(err == 0);
+
+	printf("bits: 0x%02x\n", (uint8) (bits & 0xff));
+	assert((bits & 0xff) == 0x10);
+
+	err = bitstream_read_bits(&bs, 5, &bits);
+	assert(err == 0);
+
+	printf("bits: 0x%02x\n", (uint8) (bits & 0xff));
+	assert((bits & 0xff) == 0x16);
+
+	bitstream_init(&bs, &allones[0], sizeof(allones));
+	err = bitstream_read_bits(&bs, 2, &bits);
+	assert(err == 0);
+
+	printf("bits: 0x%02x\n", (uint8) (bits & 0xff));
+	assert((bits & 0xff) == 0x03);
+
+	err = bitstream_read_bits(&bs, 5, &bits);
+	assert(err == 0);
+
+	printf("bits: 0x%02x\n", (uint8) (bits & 0xff));
+	assert((bits & 0xff) == 0x1f);
+
+}
 
 int
 main(int argc, char **argv)
@@ -645,6 +420,10 @@ main(int argc, char **argv)
 	//void *raw_chunk;
 	int ret;
 	int fd;
+
+	test_read_bit();
+	test_read_bits();
+	test_read_5_bits();
 
 	if (argc < 2)
 		elog(ERROR, "wrong number of arguments");
@@ -665,7 +444,8 @@ main(int argc, char **argv)
 
 	chunkfile = mmap(NULL, length, PROT_READ, MAP_PRIVATE, fd, 0);
 
-	printf("magic: 0x%02x%02x%02x%02x version %u\n",
+	printf("ChunkFile size %zu magic: 0x%02x%02x%02x%02x version %u\n",
+		   sizeof(ChunkFile),
 		   chunkfile->magic[0],
 		   chunkfile->magic[1],
 		   chunkfile->magic[2],
@@ -683,14 +463,12 @@ main(int argc, char **argv)
 			 chunkfile->magic[2],
 			 chunkfile->magic[3]);
 
-	printf("offset: %zu\n", (uchar *) &chunkfile->chunks[0] - (uchar *) chunkfile);
-
-
 	while (remaining > 0)
 	{
 		Chunk chunk;
 
 		offset += fill_chunk(&chunk, &chunkfile->chunks[offset], remaining);
+		printf("Chunk starts at offset %ld\n",  chunk.data - ((uint8 *)chunkfile));
 		remaining -= offset;
 		chunk_seqno++;
 
@@ -698,15 +476,16 @@ main(int argc, char **argv)
 
 		while (sample_iter_next(&it))
 		{
-			printf("sample: %" PRIi64 " %lf\n", it.timestamp, it.value);
+			printf("%" PRIi64 " %lf\n", it.timestamp, it.value);
 		}
 
-		if (it.err < 0)
+		if (it.err != 0)
 		{
 			elog(DEBUG, "Iterator err: %d", it.err);
+			break;
 		}
 
-		printf("offset=%zd remaining=%zd\n", offset, remaining);
+		printf("offset=%lld remaining=%zd\n", offset, remaining);
 	}
 
 	munmap(chunkfile, length);
