@@ -69,7 +69,10 @@ package: clean $(EXT_SQL_FILE)
 	$(install_sh) -m 644 $(EXTENSION).control 'package/extension/'
 	$(install_sh) -m 644 $(EXT_SQL_FILE) 'package/extension/'
 
-chunkfile: src/chunk.c src/varint.c src/bitstream.c
+chunkfile: src/chunk.c src/varint.c src/bitstream.c src/crc32.c
+	$(CC) -Wall -g -o $@ $^
+
+indexfile: src/index.c src/varint.c src/crc32.c
 	$(CC) -Wall -g -o $@ $^
 
 docker-image: Dockerfile

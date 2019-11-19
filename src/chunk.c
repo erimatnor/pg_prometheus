@@ -3,10 +3,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <inttypes.h>
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
@@ -31,33 +27,6 @@ typedef struct Chunk
 	const uint8 *data;
 	uint32 crc32;
 } Chunk;
-
-static uint32
-crc32_for_byte(uint32 r)
-{
-	int j;
-
-	for (j = 0; j < 8; ++j)
-		r = (r & 1? 0: (uint32)0xEDB88320L) ^ r >> 1;
-
-	return r ^ (uint32)0xFF000000L;
-}
-
-static void
-crc32(const void *data, size_t n_bytes, uint32* crc)
-{
-  static uint32 table[0x100];
-  size_t i;
-
-  if (!*table)
-  {
-	  for (i = 0; i < 0x100; ++i)
-		  table[i] = crc32_for_byte(i);
-  }
-
-  for (i = 0; i < n_bytes; ++i)
-	  *crc = table[(uint8)*crc ^ ((uint8*)data)[i]] ^ *crc >> 8;
-}
 
 
 typedef struct SampleIterator {
@@ -405,6 +374,11 @@ test_read_5_bits(void)
 	assert((bits & 0xff) == 0x1f);
 
 }
+
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 int
 main(int argc, char **argv)
