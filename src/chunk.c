@@ -11,6 +11,7 @@
 
 #include "varint.h"
 #include "bitstream.h"
+#include "crc32.h"
 
 typedef struct ChunkFile
 {

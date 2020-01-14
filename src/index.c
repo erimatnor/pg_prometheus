@@ -101,7 +101,7 @@ uint32_read(const uint8 *data)
 		uint64 postings_start;
 		uint64 postings_offset_start;
 */
-static void
+static size_t
 toc_init(TOC *toc, const uint8 *data)
 {
 	uint64 *to = (uint64 *) toc;
@@ -126,10 +126,12 @@ toc_init(TOC *toc, const uint8 *data)
 		   toc->postings_start,
 		   toc->label_offset_table,
 		   toc->postings_offset_start);
+
+	return sizeof(TOC);
 }
 
-static void
-symboltable_init(SymbolTable *st, const uint8 *data)
+static size_t
+symboltable_init(SymbolTable *st, const uint8 *data, uint64 datalen)
 {
 	const uint32 *values = (const uint32 *) data;
 	uint32 crc;
@@ -153,6 +155,8 @@ symboltable_init(SymbolTable *st, const uint8 *data)
 		   ((uint8 *)&crc)[1],
 		   ((uint8 *)&crc)[2],
 		   ((uint8 *)&crc)[3]);
+
+	return st->len + sizeof(st->len);
 }
 
 static void
@@ -175,7 +179,7 @@ symboltable_dump(SymbolTable *st)
    }
 }
 
-static void
+static size_t
 series_init(Series *series, const uint8 *data, uint64 datalen)
 {
 	uint16 varintlen;
@@ -184,9 +188,11 @@ series_init(Series *series, const uint8 *data, uint64 datalen)
 	series->data = &data[varintlen];
 	assert(series->len < datalen);
 	printf("Series { len=%" PRIu64 "}\n", series->len);
+
+	return series->len + sizeof(series->len);
 }
 
-static void
+static size_t
 labelindex_init(LabelIndex *li, const uint8 *data, uint64 datalen)
 {
 	const uint32 *values = (const uint32 *) data;
@@ -206,12 +212,36 @@ labelindex_init(LabelIndex *li, const uint8 *data, uint64 datalen)
 		   li->crc32[1],
 		   li->crc32[2],
 		   li->crc32[3]);
+
+	return li->len + sizeof(li->len);
+}
+
+static size_t
+postings_init(Postings *p, const uint8 *data, uint64 datalen)
+{
+	return datalen;
+}
+
+
+static size_t
+labeloffset_table_init(LabelOffsetTable *lot, const uint8 *data, uint64 datalen)
+{
+	return datalen;
+}
+
+
+static size_t
+postingsoffset_table_init(PostingsOffsetTable *pot, const uint8 *data, uint64 datalen)
+{
+	return datalen;
 }
 
 static void
 indexfile_init(IndexFile *index, const uint8 *data,
 			   size_t datalen)
 {
+	uint64 toc_offset = datalen - sizeof(TOC);
+
 	memcpy(index->magic, data, 4);
 	index->version = data[4];
 
@@ -228,12 +258,20 @@ indexfile_init(IndexFile *index, const uint8 *data,
 		exit(-1);
 	}
 
-	toc_init(&index->toc, &data[datalen - sizeof(TOC)]);
-	symboltable_init(&index->stable, &data[index->toc.symbols]);
-	series_init(&index->series, &data[index->toc.series], datalen - index->toc.series);
-	labelindex_init(&index->labelindex, &data[index->toc.label_indices_start], datalen - index->toc.label_indices_start);
+	toc_init(&index->toc, &data[toc_offset]);
+	symboltable_init(&index->stable, &data[index->toc.symbols],
+					 index->toc.series - index->toc.symbols);
+	series_init(&index->series, &data[index->toc.series],
+				index->toc.label_indices_start - index->toc.series);
+	labelindex_init(&index->labelindex, &data[index->toc.label_indices_start],
+					index->toc.postings_start - index->toc.label_indices_start);
+	postings_init(&index->postings, &data[index->toc.postings_start],
+				  index->toc.label_offset_table - index->toc.postings_start);
+	labeloffset_table_init(&index->lot, &data[index->toc.label_offset_table],
+				  index->toc.postings_offset_start - index->toc.label_offset_table);
+	postingsoffset_table_init(&index->pot, &data[index->toc.postings_offset_start],
+							   toc_offset - index->toc.postings_offset_start);
 
-	symboltable_dump(&index->stable);
 }
 
 #include <sys/mman.h>
@@ -247,24 +285,52 @@ int
 main(int argc, char **argv)
 {
 	IndexFile index;
-	const char *filepath;
+	const char *filepath = NULL;
 	struct stat sb;
 	size_t length;
-	off_t offset;
-	//ssize_t remaining;
-	//void *raw_chunk;
 	uint8 *rawfile;
-	uint8 *tocraw;
-	TOC *toc;
 	int ret;
 	int fd;
+	bool do_dump = false;
 
 	if (argc < 2)
 		elog(ERROR, "wrong number of arguments");
 
-	filepath = argv[1];
+	argv++;
+	argc--;
 
-	fd = open (filepath, O_RDONLY);
+	while (argc)
+	{
+		if (argv[0][0] == '-')
+		{
+			switch (argv[0][1])
+			{
+			case 'd':
+				do_dump = true;
+				break;
+			case '\0':
+				fprintf(stderr, "bad argument: %s\n", argv[0]);
+				return -1;
+			default:
+				break;
+			}
+		}
+		else
+		{
+			filepath = argv[0];
+		}
+
+		argv++;
+		argc--;
+	}
+
+	if (filepath == NULL)
+	{
+		fprintf(stderr, "no indexfile given\n");
+		return -1;
+	}
+
+	fd = open(filepath, O_RDONLY);
 
 	if (fd == -1)
 		elog(ERROR, "Could not open file: %s", strerror(errno));
@@ -282,15 +348,10 @@ main(int argc, char **argv)
 
 	indexfile_init(&index, rawfile, length);
 
-	offset = 0;
-
-	printf("sizeof TOC = %zu\n", sizeof(TOC));
-
-	tocraw = &rawfile[length - sizeof(TOC)];
-	toc = (TOC *) tocraw;
-
-	printf("TOC @ 0x%02x 0x%02x 0x%02x 0x%02x\n", tocraw[0], tocraw[1], tocraw[2], tocraw[3]);
-	printf("symbols: %" PRIu64 "\n", ntohll(toc->symbols));
+	if (do_dump)
+	{
+		symboltable_dump(&index.stable);
+	}
 
 	munmap(rawfile, length);
 
